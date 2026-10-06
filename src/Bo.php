@@ -557,8 +557,7 @@ class Bo
 		}
 
 		// 1. GET /models, as models() does
-		$headers = ['Content-Type: application/json'];
-		if ($key !== '') $headers[] = 'Authorization: Bearer '.preg_replace('/[\r\n]/', '', $key);
+		$headers = array_merge(['Content-Type: application/json'], self::authHeaders($config));
 		$res = self::debugRequest($config['api_url'].'/models', $headers, null, 15);
 		$models = null;
 		if ($res['http_code'] === 200 && is_array($json = json_decode($res['body'], true)))
@@ -576,11 +575,9 @@ class Bo
 
 		// 2. POST /chat/completions, as chatCompletions() does
 		$data = self::chatCompletionsData($config, [['role' => 'user', 'content' => 'Reply with the single word: OK']]);
-		$res = self::debugRequest($config['api_url'].'/chat/completions', [
+		$res = self::debugRequest($config['api_url'].'/chat/completions', array_merge([
 			'Content-Type: application/json',
-			'Authorization: Bearer '.preg_replace('/[\r\n]/', '', $key),
-			'Expect:',
-		], json_encode($data), $config['timeout']);
+		], self::authHeaders($config), ['Expect:']), json_encode($data), $config['timeout']);
 		$json = json_decode($res['body'] ?? '', true);
 		$message = $json['choices'][0]['message'] ?? null;
 		$finish_reason = $json['choices'][0]['finish_reason'] ?? null;
@@ -926,13 +923,9 @@ class Bo
 	 */
 	protected function chatCompletions(array $data, array $config, ?array &$usage=null, bool $is_translation=false)
 	{
-		// Security: Sanitize API key to prevent HTTP header injection
-		$safe_api_key = preg_replace('/[\r\n]/', '', $config['api_key']);
-
-		$headers = [
+		$headers = array_merge([
 			'Content-Type: application/json',
-			'Authorization: Bearer ' . $safe_api_key
-		];
+		], self::authHeaders($config));
 
 		// Make API request
 		$ch = curl_init();
@@ -1253,6 +1246,33 @@ class Bo
 	];
 
 	/**
+	 * The authorization headers for a request to the endpoint
+	 *
+	 * The key as Bearer token, as OpenAI-compatible endpoints take it. Anthropic's own endpoints
+	 * (/models, and its chat completions with some key types) want the key as x-api-key plus the
+	 * API version: both are sent for the anthropic dialect, its OpenAI-compatible endpoint accepts
+	 * either. CR / LF are stripped from the key (HTTP header injection).
+	 *
+	 * @param array $config values for keys "api_key" and the ones apiDialect() reads
+	 * @return string[] none without a key
+	 */
+	public static function authHeaders(array $config) : array
+	{
+		$key = preg_replace('/[\r\n]/', '', (string)($config['api_key'] ?? ''));
+		if ($key === '')
+		{
+			return [];
+		}
+		$headers = ['Authorization: Bearer '.$key];
+		if (self::apiDialect($config) === 'anthropic')
+		{
+			$headers[] = 'x-api-key: '.$key;
+			$headers[] = 'anthropic-version: 2023-06-01';
+		}
+		return $headers;
+	}
+
+	/**
 	 * Which request fields the endpoint understands: "openai", "anthropic" or "generic"
 	 *
 	 * The "api_dialect" config wins, if set to anything but "auto" - for proxies, whose URL does not
@@ -1564,15 +1584,9 @@ class Bo
 			{
 				throw new Api\Exception(lang('Missing AI configuration: API URL or Model!'));
 			}
-			$headers = [
+			$headers = array_merge([
 				'Content-Type: application/json',
-			];
-			if (!empty($config['api_key']))
-			{
-				// Security: Sanitize API key to prevent HTTP header injection
-				$safe_api_key = preg_replace('/[\r\n]/', '', $config['api_key']);
-				$headers[] = 'Authorization: Bearer ' . $safe_api_key;
-			}
+			], self::authHeaders($config));
 
 			$ch = curl_init();
 			curl_setopt($ch, CURLOPT_URL, $config['api_url'] . '/models');
